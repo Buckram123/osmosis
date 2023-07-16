@@ -10,6 +10,8 @@ import (
 	"github.com/osmosis-labs/osmosis/osmoutils/accum"
 	events "github.com/osmosis-labs/osmosis/v16/x/poolmanager/events"
 
+	banktypes "github.com/cosmos/cosmos-sdk/x/bank/types"
+
 	"github.com/osmosis-labs/osmosis/v16/x/concentrated-liquidity/math"
 	"github.com/osmosis-labs/osmosis/v16/x/concentrated-liquidity/swapstrategy"
 	"github.com/osmosis-labs/osmosis/v16/x/concentrated-liquidity/types"
@@ -691,46 +693,26 @@ func (k Keeper) updatePoolForSwap(
 	// InputOutputCoins performs multi-send functionality. It accepts a series of
 	// inputs that correspond to a series of outputs. It returns an error if the
 	// inputs and outputs don't lineup or if any single transfer of tokens fails.
-
-	// inputs := []banktypes.Input{
-	// 	{
-	// 		Address: swapDetails.Sender.String(),
-	// 		Coins:   sdk.NewCoins(swapDetails.TokenIn),
-	// 	},
-	// 	{
-	// 		Address: pool.GetAddress().String(),
-	// 		Coins:   sdk.NewCoins(swapDetails.TokenOut),
-	// 	},
-	// }
-
-	// outputs := []banktypes.Output{
-	// 	{
-	// 		Address: pool.GetAddress().String(),
-	// 		Coins:   sdk.NewCoins(swapDetails.TokenIn),
-	// 	},
-	// 	{
-	// 		Address: swapDetails.Sender.String(),
-	// 		Coins:   sdk.NewCoins(swapDetails.TokenOut),
-	// 	},
-	// }
-
-	// err := k.bankKeeper.InputOutputCoins(ctx, inputs, outputs)
-	// if err != nil {
-	// 	return types.InsufficientPoolBalanceError{Err: err}
-	// }
-
-	// Send the input token from the user to the pool's primary address
-	err := k.bankKeeper.SendCoins(ctx, swapDetails.Sender, pool.GetAddress(), sdk.Coins{
-		swapDetails.TokenIn,
-	})
+	err := k.bankKeeper.InputOutputCoins(ctx, []banktypes.Input{{
+		Address: swapDetails.Sender.String(),
+		Coins:   sdk.NewCoins(swapDetails.TokenIn),
+	}}, []banktypes.Output{
+		{
+			Address: pool.GetAddress().String(),
+			Coins:   sdk.NewCoins(swapDetails.TokenIn),
+		}})
 	if err != nil {
-		return types.InsufficientUserBalanceError{Err: err}
+		return types.InsufficientPoolBalanceError{Err: err}
 	}
 
-	// Send the output token to the sender from the pool
-	err = k.bankKeeper.SendCoins(ctx, pool.GetAddress(), swapDetails.Sender, sdk.Coins{
-		swapDetails.TokenOut,
-	})
+	err = k.bankKeeper.InputOutputCoins(ctx, []banktypes.Input{{
+		Address: pool.GetAddress().String(),
+		Coins:   sdk.NewCoins(swapDetails.TokenOut),
+	}}, []banktypes.Output{
+		{
+			Address: swapDetails.Sender.String(),
+			Coins:   sdk.NewCoins(swapDetails.TokenOut),
+		}})
 
 	if err != nil {
 		return types.InsufficientPoolBalanceError{Err: err}
@@ -795,16 +777,15 @@ func (k Keeper) setupSwapStrategy(p types.ConcentratedPoolExtension, spreadFacto
 	return swapStrategy, sqrtPriceLimit, nil
 }
 
-func (k Keeper) getPoolForSwap(ctx sdk.Context, p types.ConcentratedPoolExtension) (types.ConcentratedPoolExtension, error) {
-
-	hasPositionInPool, err := k.HasAnyPositionForPool(ctx, p.GetId())
+func (k Keeper) getPoolForSwap(ctx sdk.Context, pool types.ConcentratedPoolExtension) (types.ConcentratedPoolExtension, error) {
+	hasPositionInPool, err := k.HasAnyPositionForPool(ctx, pool.GetId())
 	if err != nil {
-		return p, err
+		return pool, err
 	}
 	if !hasPositionInPool {
-		return p, types.NoSpotPriceWhenNoLiquidityError{PoolId: p.GetId()}
+		return pool, types.NoSpotPriceWhenNoLiquidityError{PoolId: pool.GetId()}
 	}
-	return p, nil
+	return pool, nil
 }
 
 func (k Keeper) getSwapAccumulators(ctx sdk.Context, poolId uint64) (accum.AccumulatorObject, []accum.AccumulatorObject, error) {

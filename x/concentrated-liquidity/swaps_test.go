@@ -3447,3 +3447,77 @@ func (s *KeeperTestSuite) TestInfiniteSwapLoop_OutGivenIn() {
 	_, _, _, err = s.clk.SwapOutAmtGivenIn(s.Ctx, swapAddress, pool, tokenOut, ETH, pool.GetSpreadFactor(s.Ctx), sdk.ZeroDec())
 	s.Require().NoError(err)
 }
+
+func (s *KeeperTestSuite) TestCheckSwapGas() {
+	maxGasToConsume := uint64(50_000_000) // this is the max amount of gas allowed in protorev
+	s.SetupTest()
+	pool := s.PrepareCustomConcentratedPool(s.TestAccs[0], ETH, USDC, 1, sdk.ZeroDec())
+
+	testAccs := apptesting.CreateRandomAccounts(2)
+	positionOwner := testAccs[0]
+
+	ethToFund := sdk.NewCoin(ETH, sdk.Int(sdk.MustNewDecFromStr("10000000000000000000000000000000000000000")))
+	usdcToFund := sdk.NewCoin(USDC, sdk.Int(sdk.MustNewDecFromStr("10000000000000000000000000000000000000000")))
+
+	// Create position near min tick
+	s.FundAcc(positionOwner, sdk.NewCoins(ethToFund, usdcToFund))
+	_, _, _, _, _, _, err := s.clk.CreatePosition(s.Ctx, pool.GetId(), positionOwner, DefaultRangeTestParams.baseAssets, sdk.ZeroInt(), sdk.ZeroInt(), -100, 100)
+	s.Require().NoError(err)
+
+	swapAddress := testAccs[1]
+	s.FundAcc(swapAddress, sdk.NewCoins(ethToFund, usdcToFund))
+
+	pool, err = s.clk.GetPoolById(s.Ctx, pool.GetId())
+	s.Require().NoError(err)
+
+	// make simple swap and check gas (no-tick cross)
+	_, _, _, err = s.clk.SwapInAmtGivenOut(s.Ctx, swapAddress, pool, sdk.NewCoin(USDC, sdk.NewInt(100_000_000)), ETH, pool.GetSpreadFactor(s.Ctx), sdk.ZeroDec())
+	s.Require().NoError(err)
+
+	s.Require().True(s.Ctx.GasMeter().GasConsumed() < maxGasToConsume)
+
+	// cross x number of tick in left to right direction and check gas (contains accumulator)
+	// initialize 50 positions in left to right direction
+	lowerTick := int64(-100)
+	upperTick := int64(100)
+	for i := 1; i <= 50; i++ {
+		_, _, _, _, _, _, err := s.clk.CreatePosition(s.Ctx, pool.GetId(), positionOwner, DefaultRangeTestParams.baseAssets, sdk.ZeroInt(), sdk.ZeroInt(), lowerTick, upperTick)
+		s.Require().NoError(err)
+
+		lowerTick += 100
+		upperTick += 100
+	}
+
+	// initialize 50 positions in right to left direction
+	lowerTick = int64(-100)
+	upperTick = int64(100)
+	for i := 1; i <= 50; i++ {
+		_, _, _, _, _, _, err := s.clk.CreatePosition(s.Ctx, pool.GetId(), positionOwner, DefaultRangeTestParams.baseAssets, sdk.ZeroInt(), sdk.ZeroInt(), lowerTick, upperTick)
+		s.Require().NoError(err)
+
+		lowerTick -= 100
+		upperTick -= 100
+	}
+
+	pool, err = s.clk.GetPoolById(s.Ctx, pool.GetId())
+	s.Require().NoError(err)
+
+	// Make a large swap in OutGivenIn (positive tick direction) from currentTick = -20 to 1735
+	// Amount of tickCrossed = 1754
+	// Make sure the gas is < 50M
+	_, _, _, err = s.clk.SwapOutAmtGivenIn(s.Ctx, swapAddress, pool, sdk.NewCoin(USDC, sdk.NewInt(100_000_000_000)), ETH, pool.GetSpreadFactor(s.Ctx), sdk.ZeroDec())
+	s.Require().NoError(err)
+
+	s.Require().True(s.Ctx.GasMeter().GasConsumed() < maxGasToConsume)
+
+	pool, err = s.clk.GetPoolById(s.Ctx, pool.GetId())
+	s.Require().NoError(err)
+
+	// Make a large swap in InGivenOut (negative tick direction) from currentTick = 1735 to 736
+	// Amount of tickCrossed = 998
+	// Make sure the gas is < 50M
+	_, _, _, err = s.clk.SwapInAmtGivenOut(s.Ctx, swapAddress, pool, sdk.NewCoin(USDC, sdk.NewInt(50_000_000_000)), ETH, pool.GetSpreadFactor(s.Ctx), sdk.ZeroDec())
+	s.Require().NoError(err)
+
+	s.Require().True(s.Ctx.GasMeter().GasConsumed() < maxGasToConsume)
+}
