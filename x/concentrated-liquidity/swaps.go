@@ -680,16 +680,6 @@ func (k Keeper) updatePoolForSwap(
 	// Remove the spread factors from the input token
 	swapDetails.TokenIn.Amount = swapDetails.TokenIn.Amount.Sub(spreadFactorsRoundedUp.Amount)
 
-	// Send the spread factors taken from the input token from the user to the pool's spread factor account
-	if !spreadFactorsRoundedUp.IsZero() {
-		err := k.bankKeeper.SendCoins(ctx, swapDetails.Sender, pool.GetSpreadRewardsAddress(), sdk.Coins{
-			spreadFactorsRoundedUp,
-		})
-		if err != nil {
-			return types.InsufficientUserBalanceError{Err: err}
-		}
-	}
-
 	// InputOutputCoins performs multi-send functionality. It accepts a series of
 	// inputs that correspond to a series of outputs. It returns an error if the
 	// inputs and outputs don't lineup or if any single transfer of tokens fails.
@@ -702,7 +692,22 @@ func (k Keeper) updatePoolForSwap(
 			Coins:   sdk.NewCoins(swapDetails.TokenIn),
 		}})
 	if err != nil {
-		return types.InsufficientPoolBalanceError{Err: err}
+		return types.InsufficientUserBalanceError{Err: err}
+	}
+
+	// Send the spread factors taken from the input token from the user to the pool's spread factor account
+	if !spreadFactorsRoundedUp.IsZero() {
+		err := k.bankKeeper.InputOutputCoins(ctx, []banktypes.Input{{
+			Address: swapDetails.Sender.String(),
+			Coins:   sdk.NewCoins(spreadFactorsRoundedUp),
+		}}, []banktypes.Output{
+			{
+				Address: pool.GetSpreadRewardsAddress().String(),
+				Coins:   sdk.NewCoins(spreadFactorsRoundedUp),
+			}})
+		if err != nil {
+			return types.InsufficientUserBalanceError{Err: err}
+		}
 	}
 
 	err = k.bankKeeper.InputOutputCoins(ctx, []banktypes.Input{{
