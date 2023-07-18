@@ -10,8 +10,6 @@ import (
 	"github.com/osmosis-labs/osmosis/osmoutils/accum"
 	events "github.com/osmosis-labs/osmosis/v16/x/poolmanager/events"
 
-	banktypes "github.com/cosmos/cosmos-sdk/x/bank/types"
-
 	"github.com/osmosis-labs/osmosis/v16/x/concentrated-liquidity/math"
 	"github.com/osmosis-labs/osmosis/v16/x/concentrated-liquidity/swapstrategy"
 	"github.com/osmosis-labs/osmosis/v16/x/concentrated-liquidity/types"
@@ -315,10 +313,12 @@ func (k Keeper) computeOutAmtGivenIn(
 ) (tokenIn, tokenOut sdk.Coin, poolUpdates PoolUpdates, totalSpreadFactors sdk.Dec, err error) {
 	// Get pool and asset info
 	// this also checks if pool has any position to perform swap.
-	p, err := k.getPoolForSwap(ctx, pool)
+	p, err := k.validatePoolHasPositions(ctx, pool)
 	if err != nil {
 		return sdk.Coin{}, sdk.Coin{}, PoolUpdates{}, sdk.Dec{}, err
 	}
+
+	poolId := p.GetId()
 
 	if err := checkDenomValidity(tokenInMin.Denom, tokenOutDenom, p.GetToken0(), p.GetToken1()); err != nil {
 		return sdk.Coin{}, sdk.Coin{}, PoolUpdates{}, sdk.Dec{}, err
@@ -329,7 +329,7 @@ func (k Keeper) computeOutAmtGivenIn(
 		return sdk.Coin{}, sdk.Coin{}, PoolUpdates{}, sdk.Dec{}, err
 	}
 
-	spreadRewardAccumulator, uptimeAccums, err := k.getSwapAccumulators(ctx, pool.GetId())
+	spreadRewardAccumulator, uptimeAccums, err := k.getSwapAccumulators(ctx, poolId)
 	if err != nil {
 		return sdk.Coin{}, sdk.Coin{}, PoolUpdates{}, sdk.Dec{}, err
 	}
@@ -338,7 +338,7 @@ func (k Keeper) computeOutAmtGivenIn(
 	// as we iterate through the following for loop, this swap state will get updated after each required iteration
 	swapState := newSwapState(tokenInMin.Amount, p, swapStrategy)
 
-	nextInitTickIter := swapStrategy.InitializeNextTickIterator(ctx, pool.GetId(), swapState.tick)
+	nextInitTickIter := swapStrategy.InitializeNextTickIterator(ctx, poolId, swapState.tick)
 	defer nextInitTickIter.Close()
 
 	// Iterate and update swapState until we swap all tokenIn or we reach the specific sqrtPriceLimit
@@ -352,7 +352,7 @@ func (k Keeper) computeOutAmtGivenIn(
 
 		// Iterator must be valid to be able to retrieve the next tick from it below.
 		if !nextInitTickIter.Valid() {
-			return sdk.Coin{}, sdk.Coin{}, PoolUpdates{}, sdk.Dec{}, types.RanOutOfTicksForPoolError{PoolId: pool.GetId()}
+			return sdk.Coin{}, sdk.Coin{}, PoolUpdates{}, sdk.Dec{}, types.RanOutOfTicksForPoolError{PoolId: poolId}
 		}
 
 		// We first check to see what the position of the nearest initialized tick is
@@ -428,7 +428,7 @@ func (k Keeper) computeOutAmtGivenIn(
 		// See definition of swapNoProgressLimit for more details.
 		if amountIn.IsZero() {
 			if swapNoProgressIterationCount >= swapNoProgressLimit {
-				return sdk.Coin{}, sdk.Coin{}, PoolUpdates{}, sdk.Dec{}, types.SwapNoProgressError{PoolId: pool.GetId(), UserProvidedCoin: tokenInMin}
+				return sdk.Coin{}, sdk.Coin{}, PoolUpdates{}, sdk.Dec{}, types.SwapNoProgressError{PoolId: poolId, UserProvidedCoin: tokenInMin}
 			}
 			swapNoProgressIterationCount++
 		}
@@ -470,10 +470,12 @@ func (k Keeper) computeInAmtGivenOut(
 	spreadFactor sdk.Dec,
 	priceLimit sdk.Dec,
 ) (tokenIn, tokenOut sdk.Coin, poolUpdates PoolUpdates, totalSpreadFactors sdk.Dec, err error) {
-	p, err := k.getPoolForSwap(ctx, pool)
+	p, err := k.validatePoolHasPositions(ctx, pool)
 	if err != nil {
 		return sdk.Coin{}, sdk.Coin{}, PoolUpdates{}, sdk.Dec{}, err
 	}
+
+	poolId := p.GetId()
 
 	if err := checkDenomValidity(tokenInDenom, desiredTokenOut.Denom, p.GetToken0(), p.GetToken1()); err != nil {
 		return sdk.Coin{}, sdk.Coin{}, PoolUpdates{}, sdk.Dec{}, err
@@ -488,10 +490,10 @@ func (k Keeper) computeInAmtGivenOut(
 	// as we iterate through the following for loop, this swap state will get updated after each required iteration
 	swapState := newSwapState(desiredTokenOut.Amount, p, swapStrategy)
 
-	nextInitTickIter := swapStrategy.InitializeNextTickIterator(ctx, pool.GetId(), swapState.tick)
+	nextInitTickIter := swapStrategy.InitializeNextTickIterator(ctx, poolId, swapState.tick)
 	defer nextInitTickIter.Close()
 
-	spreadRewardAccumulator, uptimeAccums, err := k.getSwapAccumulators(ctx, pool.GetId())
+	spreadRewardAccumulator, uptimeAccums, err := k.getSwapAccumulators(ctx, poolId)
 	if err != nil {
 		return sdk.Coin{}, sdk.Coin{}, PoolUpdates{}, sdk.Dec{}, err
 	}
@@ -506,7 +508,7 @@ func (k Keeper) computeInAmtGivenOut(
 
 		// Iterator must be valid to be able to retrieve the next tick from it below.
 		if !nextInitTickIter.Valid() {
-			return sdk.Coin{}, sdk.Coin{}, PoolUpdates{}, sdk.Dec{}, types.RanOutOfTicksForPoolError{PoolId: pool.GetId()}
+			return sdk.Coin{}, sdk.Coin{}, PoolUpdates{}, sdk.Dec{}, types.RanOutOfTicksForPoolError{PoolId: poolId}
 		}
 
 		// We first check to see what the position of the nearest initialized tick is
@@ -578,7 +580,7 @@ func (k Keeper) computeInAmtGivenOut(
 		// See definition of swapNoProgressLimit for more details.
 		if amountOut.IsZero() {
 			if swapNoProgressIterationCount >= swapNoProgressLimit {
-				return sdk.Coin{}, sdk.Coin{}, PoolUpdates{}, sdk.Dec{}, types.SwapNoProgressError{PoolId: pool.GetId(), UserProvidedCoin: desiredTokenOut}
+				return sdk.Coin{}, sdk.Coin{}, PoolUpdates{}, sdk.Dec{}, types.SwapNoProgressError{PoolId: poolId, UserProvidedCoin: desiredTokenOut}
 			}
 			swapNoProgressIterationCount++
 		}
@@ -683,41 +685,28 @@ func (k Keeper) updatePoolForSwap(
 	// InputOutputCoins performs multi-send functionality. It accepts a series of
 	// inputs that correspond to a series of outputs. It returns an error if the
 	// inputs and outputs don't lineup or if any single transfer of tokens fails.
-	err := k.bankKeeper.InputOutputCoins(ctx, []banktypes.Input{{
-		Address: swapDetails.Sender.String(),
-		Coins:   sdk.NewCoins(swapDetails.TokenIn),
-	}}, []banktypes.Output{
-		{
-			Address: pool.GetAddress().String(),
-			Coins:   sdk.NewCoins(swapDetails.TokenIn),
-		}})
+	// Send the input token from the user to the pool's primary address
+	err := k.bankKeeper.SendCoins(ctx, swapDetails.Sender, pool.GetAddress(), sdk.Coins{
+		swapDetails.TokenIn,
+	})
 	if err != nil {
 		return types.InsufficientUserBalanceError{Err: err}
 	}
 
 	// Send the spread factors taken from the input token from the user to the pool's spread factor account
 	if !spreadFactorsRoundedUp.IsZero() {
-		err := k.bankKeeper.InputOutputCoins(ctx, []banktypes.Input{{
-			Address: swapDetails.Sender.String(),
-			Coins:   sdk.NewCoins(spreadFactorsRoundedUp),
-		}}, []banktypes.Output{
-			{
-				Address: pool.GetSpreadRewardsAddress().String(),
-				Coins:   sdk.NewCoins(spreadFactorsRoundedUp),
-			}})
+		err = k.bankKeeper.SendCoins(ctx, swapDetails.Sender, pool.GetSpreadRewardsAddress(), sdk.Coins{
+			spreadFactorsRoundedUp,
+		})
 		if err != nil {
 			return types.InsufficientUserBalanceError{Err: err}
 		}
 	}
 
-	err = k.bankKeeper.InputOutputCoins(ctx, []banktypes.Input{{
-		Address: pool.GetAddress().String(),
-		Coins:   sdk.NewCoins(swapDetails.TokenOut),
-	}}, []banktypes.Output{
-		{
-			Address: swapDetails.Sender.String(),
-			Coins:   sdk.NewCoins(swapDetails.TokenOut),
-		}})
+	// Send the output token to the sender from the pool
+	err = k.bankKeeper.SendCoins(ctx, pool.GetAddress(), swapDetails.Sender, sdk.Coins{
+		swapDetails.TokenOut,
+	})
 
 	if err != nil {
 		return types.InsufficientPoolBalanceError{Err: err}
@@ -782,7 +771,7 @@ func (k Keeper) setupSwapStrategy(p types.ConcentratedPoolExtension, spreadFacto
 	return swapStrategy, sqrtPriceLimit, nil
 }
 
-func (k Keeper) getPoolForSwap(ctx sdk.Context, pool types.ConcentratedPoolExtension) (types.ConcentratedPoolExtension, error) {
+func (k Keeper) validatePoolHasPositions(ctx sdk.Context, pool types.ConcentratedPoolExtension) (types.ConcentratedPoolExtension, error) {
 	hasPositionInPool, err := k.HasAnyPositionForPool(ctx, pool.GetId())
 	if err != nil {
 		return pool, err
