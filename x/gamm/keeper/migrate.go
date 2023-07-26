@@ -12,6 +12,8 @@ import (
 
 	"github.com/cosmos/cosmos-sdk/store/prefix"
 	sdk "github.com/cosmos/cosmos-sdk/types"
+
+	clmodel "github.com/osmosis-labs/osmosis/v16/x/concentrated-liquidity/model"
 )
 
 // MigrateUnlockedPositionFromBalancerToConcentrated migrates unlocked lp tokens from a balancer pool to a concentrated liquidity pool.
@@ -352,6 +354,60 @@ func (k Keeper) UpdateMigrationRecords(ctx sdk.Context, records []gammmigration.
 	})
 	if err != nil {
 		return err
+	}
+	return nil
+}
+
+// CreateClPoolAndLinkToCFMMPool creates a CL pool and links it to an existing CFMM pool.
+func (k Keeper) CreateClPoolAndLinkToCFMMPool(ctx sdk.Context, records []types.PoolRecordWithCFMMLink) error {
+	poolmanagerModuleAcc := k.accountKeeper.GetModuleAccount(ctx, poolmanagertypes.ModuleName)
+	poolCreatorAddress := poolmanagerModuleAcc.GetAddress()
+
+	for _, record := range records {
+		cfmmPool, err := k.GetCFMMPool(ctx, record.BalancerPoolId)
+		if err != nil {
+			return err
+		}
+
+		poolLiquidity := cfmmPool.GetTotalPoolLiquidity(ctx)
+		if len(poolLiquidity) != 2 {
+			return fmt.Errorf("can only have 2 denoms in CL pool")
+		}
+
+		foundDenom0 := false
+		denom1 := ""
+		for _, coin := range poolLiquidity {
+			if coin.Denom == record.Denom0 {
+				foundDenom0 = true
+			} else {
+				denom1 = coin.Denom
+			}
+		}
+
+		if !foundDenom0 {
+			return fmt.Errorf("desired denom (%s) was not found in the pool", record.Denom0)
+		}
+
+		createPoolMsg := clmodel.NewMsgCreateConcentratedPool(poolCreatorAddress, record.Denom0, denom1, record.TickSpacing, record.SpreadFactor)
+		concentratedPool, err := k.poolManager.CreateConcentratedPoolAsPoolManager(ctx, createPoolMsg)
+		if err != nil {
+			return err
+		}
+
+		// link the created cl pool with existing balancer pool
+		// Set the migration link in x/gamm.
+		// This will also migrate the CFMM distribution records to point to the new CL pool.
+		err = k.OverwriteMigrationRecordsAndRedirectDistrRecords(ctx, gammmigration.MigrationRecords{
+			BalancerToConcentratedPoolLinks: []gammmigration.BalancerToConcentratedPoolLink{
+				{
+					BalancerPoolId: record.BalancerPoolId,
+					ClPoolId:       concentratedPool.GetId(),
+				},
+			},
+		})
+		if err != nil {
+			return err
+		}
 	}
 	return nil
 }

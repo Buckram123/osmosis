@@ -199,7 +199,7 @@ func (p *CreateConcentratedLiquidityPoolsAndLinktoCFMMProposal) ValidateBasic() 
 	return nil
 }
 
-// String returns a string containing the decrease tick spacing proposal.
+// String returns a string containing creating CL pool and linking it to an existing CFMM pool.
 func (p CreateConcentratedLiquidityPoolsAndLinktoCFMMProposal) String() string {
 	recordsStr := ""
 	for _, record := range p.PoolRecordsWithCfmmLink {
